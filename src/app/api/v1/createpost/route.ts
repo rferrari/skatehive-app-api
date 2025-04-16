@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { CommentOperation, PrivateKey } from '@hiveio/dhive';
+import { CommentOperation, CommentOptionsOperation, PrivateKey } from '@hiveio/dhive';
 import { HiveClient } from '@/lib/hive-client';
 import { HAFSQL_Database } from '@/lib/database';
 
@@ -13,7 +13,7 @@ function new_permlink() {
 export async function POST(request: Request) {
   if (DEBUG) console.log('Received POST request');
 
-  const postingKey = request.headers.get('Authorization')?.replace("Bearer ", "");
+  const postingKey = request.headers.get('postkey')?.replace("SkatePass ", "");
   if (!postingKey) return NextResponse.json({ error: 'Missing posting key in headers' }, { status: 400 });
 
   const pinataApiKey = process.env.PINATA_API_KEY;
@@ -33,7 +33,7 @@ export async function POST(request: Request) {
 
   try {
     const data = await request.json();
-    
+
     if (DEBUG) console.log('JSON data received:', Object.keys(data));
 
     const { author, body, media } = data;
@@ -51,7 +51,7 @@ export async function POST(request: Request) {
         bytes[i] = binaryString.charCodeAt(i);
       }
       const blob = new Blob([bytes], { type: media.type });
-      
+
       formData.append('file', blob, media.name);
 
       const pinataResponse = await fetch(pinataUrl, {
@@ -71,7 +71,7 @@ export async function POST(request: Request) {
 
       const pinataResult = await pinataResponse.json();
       ipfsHashes.push(pinataResult.IpfsHash);
-      
+
       if (DEBUG) console.log('Media uploaded to IPFS:', pinataResult.IpfsHash);
     }
 
@@ -100,11 +100,13 @@ export async function POST(request: Request) {
 
     if (DEBUG) console.log('Latest snap container:', snapContainerRow);
 
+    const newPermlink = new_permlink();
+
     const commentOp: CommentOperation[1] = {
       parent_author: 'peak.snaps',
       parent_permlink: snapContainerRow[0].permlink,
       author,
-      permlink: new_permlink(),
+      permlink: newPermlink,
       title: "",
       body: body + mediaContent,
       json_metadata: JSON.stringify({
@@ -114,11 +116,47 @@ export async function POST(request: Request) {
       }, null, 2)
     };
 
+
+    const formatBeneficiaries = (beneficiariesArray: any[]) => {
+      let seen = new Set();
+      return beneficiariesArray.filter(({ account }: { account: string }) => {
+        const duplicate = seen.has(account);
+        seen.add(account);
+        return !duplicate;
+      }).map(beneficiary => ({
+        account: beneficiary.account,
+        weight: parseInt(beneficiary.weight, 10) // Ensure weight is an integer
+      })).sort((a, b) => a.account.localeCompare(b.account));
+    };
+
+    const beneficiariesArray = [
+      {account: "skatedev",   weight: 300,},
+      {account: "steemskate", weight: 200,},
+    ];
+    const beneficiaries = formatBeneficiaries(beneficiariesArray);
+
+    const commentOptions: CommentOptionsOperation[1] = {
+      author,
+      permlink: newPermlink,
+      /** HBD value of the maximum payout this post will receive. */
+      max_accepted_payout: "10000.000 HBD",
+      /** The percent of Hive Dollars to key, unkept amounts will be received as Hive Power. */
+      percent_hbd: 10000,
+      /** Whether to allow post to receive votes. */
+      allow_votes: true,
+      /** Whether to allow post to recieve curation rewards. */
+      allow_curation_rewards: true,
+      extensions: [[0, {
+        beneficiaries: beneficiaries,
+      }]],
+    }
+
     if (DEBUG) console.log('Posting to Hive:', commentOp);
 
     const key = PrivateKey.from(postingKey);
-    const result = await HiveClient.broadcast.comment(commentOp, key);
-    
+    const result = await HiveClient.broadcast.commentWithOptions(commentOp,commentOptions, key)
+                                          // .comment(commentOp, key);
+
     if (DEBUG) console.log('Hive broadcast result:', result);
 
     return NextResponse.json({

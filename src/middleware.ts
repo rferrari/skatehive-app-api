@@ -12,7 +12,7 @@ export async function middleware(request: NextRequest) {
       return new NextResponse(null, { status: 401, statusText: 'Unauthorized' });
     }
   }
-  console.log('✅ Authorized access for:', pathname);
+  // console.log('✅ Authorized access for:', pathname);
   return NextResponse.next();
 }
 
